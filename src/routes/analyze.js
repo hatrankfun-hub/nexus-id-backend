@@ -1,8 +1,8 @@
 const express    = require('express');
 const rateLimit  = require('express-rate-limit');
 const xApi       = require('../services/xApiService');
-const nexusEngine = require('../services/nexusEngine');
-const aiService  = require('../services/aiService');
+const { calcActivityScore, calcSignalLevel } = require('../services/nexusEngine');
+const { analyzeIdentity, fallbackIdentity }  = require('../services/aiService');
 const db         = require('../services/dbService');
 
 const router = express.Router();
@@ -18,11 +18,13 @@ router.post('/', limiter, async (req, res, next) => {
     if (!validUsername(username)) return res.status(400).json({ error: 'Invalid username' });
     const key = username.toLowerCase();
 
+    // Cek cache (1 jam)
     const cached = await db.getResult(key);
     if (cached && isFresh(cached.last_fetched_at)) {
       return res.json({ ...cached, source: 'cache' });
     }
 
+    // Fetch X API
     let xProfile, timeline;
     try {
       xProfile = await xApi.fetchUserProfile(username);
@@ -32,25 +34,33 @@ router.post('/', limiter, async (req, res, next) => {
       throw new Error('X API error: ' + err.message);
     }
 
-    const metrics  = xProfile.public_metrics;
-    const dist     = xApi.calcDistribution(timeline);
-    const engRate  = xApi.calcEngagementRate(timeline, metrics.followers_count);
-    const identity = nexusEngine.calcIdentity({
-      username: key,
+    const metrics     = xProfile.public_metrics;
+    const dist        = xApi.calcDistribution(timeline);
+    const engRate     = xApi.calcEngagementRate(timeline, metrics.followers_count);
+    const activityScore = calcActivityScore({
       followersCount: metrics.followers_count,
       tweetCount:     metrics.tweet_count,
       engagementRate: engRate,
       joinedAt:       xProfile.created_at
     });
+    const signalLevel = calcSignalLevel(activityScore);
 
-    const needsAI = !cached || cached.signal_level !== identity.signalLevel;
-    const aiText  = needsAI
-      ? await aiService.generateNarrative({
-          username: key, displayName: xProfile.name,
-          ...identity, engagementRate: engRate,
-          followersCount: metrics.followers_count
-        })
-      : cached.ai_narrative;
+    // AI analisis konten tweet + bio → Aura, Tribe, Narrative
+    let aiResult;
+    try {
+      aiResult = await analyzeIdentity({
+        username:       key,
+        displayName:    xProfile.name,
+        bio:            xProfile.description || '',
+        recentTweets:   timeline,
+        followersCount: metrics.followers_count,
+        engagementRate: engRate,
+        signalLevel
+      });
+    } catch (err) {
+      console.error('[AI] analyzeIdentity failed:', err.message);
+      aiResult = fallbackIdentity(key, signalLevel);
+    }
 
     const record = {
       username:           key,
@@ -61,13 +71,13 @@ router.post('/', limiter, async (req, res, next) => {
       following_count:    metrics.following_count,
       tweet_count:        metrics.tweet_count,
       engagement_rate:    engRate,
-      activity_score:     identity.activityScore,
+      activity_score:     activityScore,
       original_tweet_pct: dist.original,
       joined_at:          xProfile.created_at || null,
-      aura_index:         identity.auraIndex,
-      tribe_index:        identity.tribeIndex,
-      signal_level:       identity.signalLevel,
-      ai_narrative:       aiText,
+      aura_index:         aiResult.auraIndex,
+      tribe_index:        aiResult.tribeIndex,
+      signal_level:       signalLevel,
+      ai_narrative:       aiResult.narrative,
       last_fetched_at:    new Date().toISOString()
     };
 
