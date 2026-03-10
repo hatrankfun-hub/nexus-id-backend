@@ -8,16 +8,11 @@ const analyzeRouter = require('./routes/analyze');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS - izinkan semua origin
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+// Trust Railway proxy
+app.set('trust proxy', 1);
 
-// Handle preflight
+app.use(cors({ origin: '*', methods: ['GET','POST','OPTIONS'], allowedHeaders: ['Content-Type'] }));
 app.options('*', cors());
-
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(express.json());
 app.use(rateLimit({ windowMs: 15*60*1000, max: 100 }));
@@ -29,7 +24,7 @@ app.get('/health', (_, res) => res.json({
 
 app.use((err, req, res, next) => {
   console.error('[Error]', err.message);
-  res.status(500).json({ error: err.message || 'Internal Server Error' });
+  res.status(500).json({ error: err.message });
 });
 
 app.listen(PORT, () => console.log(`[NEXUS ID] API running on port ${PORT}`));
