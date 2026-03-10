@@ -8,12 +8,17 @@ const analyzeRouter = require('./routes/analyze');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(helmet());
+// CORS - izinkan semua origin
 app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type']
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Handle preflight
+app.options('*', cors());
+
+app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(express.json());
 app.use(rateLimit({ windowMs: 15*60*1000, max: 100 }));
 app.use('/api/analyze', analyzeRouter);
